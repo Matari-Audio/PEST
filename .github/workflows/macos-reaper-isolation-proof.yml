@@ -1,0 +1,185 @@
+name: macOS REAPER isolation proof
+
+on:
+  push:
+    branches: [task/macos-reaper-isolation]
+
+permissions:
+  contents: read
+
+jobs:
+  prove:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Prove poisoned duplicate isolation
+        shell: bash
+        run: |
+          set -euo pipefail
+          PROOF="$RUNNER_TEMP/pest-macos-reaper-isolation"
+          RECEIPT="$GITHUB_WORKSPACE/proof"
+          REAPER_DMG="$PROOF/reaper779.dmg"
+          REAPER_APP="$PROOF/REAPER.app"
+          BOOT="$PROOF/bootstrap"
+          SCENARIO="$PROOF/scenario"
+          STAGED="$PROOF/staged"
+          POISON="$HOME/Library/Audio/Plug-Ins"
+          mkdir -p "$PROOF" "$RECEIPT" "$BOOT" "$SCENARIO" "$STAGED" "$POISON/CLAP" "$POISON/VST3"
+
+          exec > >(tee "$RECEIPT/commands.log") 2>&1
+          uname -a
+          sw_vers
+          test "$(uname -m)" = arm64
+
+          curl --fail --location --retry 3 \
+            --output "$REAPER_DMG" \
+            https://www.reaper.fm/files/7.x/reaper779_universal.dmg
+          printf '2493cea3cd6105d84bbf02710280d73ea8a119f06370152773483767fade8602  %s\n' "$REAPER_DMG" > "$RECEIPT/reaper-dmg.sha256.expected"
+          shasum -a 256 "$REAPER_DMG" | tee "$RECEIPT/reaper-dmg.sha256.actual"
+          test "$(shasum -a 256 "$REAPER_DMG" | cut -d' ' -f1)" = 2493cea3cd6105d84bbf02710280d73ea8a119f06370152773483767fade8602
+          MOUNT=$(hdiutil attach -acceptlicense -nobrowse -readonly "$REAPER_DMG" | awk '/\/Volumes\// {sub(/^.*\/Volumes\//,"/Volumes/"); print; exit}')
+          ditto "$MOUNT/REAPER.app" "$REAPER_APP"
+          hdiutil detach "$MOUNT"
+          file "$REAPER_APP/Contents/MacOS/REAPER" | tee "$RECEIPT/reaper-executable.file"
+          lipo -archs "$REAPER_APP/Contents/MacOS/REAPER" | tee "$RECEIPT/reaper-executable.archs"
+
+          download_release() {
+            local version=$1 sha=$2
+            local archive="$PROOF/buffr-$version-macos.zip"
+            curl --fail --location --retry 3 \
+              --output "$archive" \
+              "https://matari-audio.com/api/downloads/file?key=buffr/$version/macos/buffr-$version-macos.zip"
+            test "$(shasum -a 256 "$archive" | cut -d' ' -f1)" = "$sha"
+            shasum -a 256 "$archive" | tee "$RECEIPT/buffr-$version-archive.sha256"
+            ditto -x -k "$archive" "$PROOF/buffr-$version"
+            local pkg
+            pkg=$(find "$PROOF/buffr-$version" -type f -name '*.pkg' -print -quit)
+            test -n "$pkg"
+            pkgutil --expand-full "$pkg" "$PROOF/buffr-$version-expanded"
+          }
+
+          download_release 1.0.40 49e6db33061213889f4dece99b0121a1ab951b6d078499f4d4654dd25fd77c8a
+          download_release 1.0.69 d45a5928d595d704b6696794627eb8689ff37213b3cfea6d85dfa552d659e2bb
+
+          find_bundle() {
+            find "$1" -type d -name "$2" -print -quit
+          }
+          POISON_CLAP=$(find_bundle "$PROOF/buffr-1.0.40-expanded" BUFFR.clap)
+          POISON_VST3=$(find_bundle "$PROOF/buffr-1.0.40-expanded" BUFFR.vst3)
+          STAGED_CLAP=$(find_bundle "$PROOF/buffr-1.0.69-expanded" BUFFR.clap)
+          STAGED_VST3=$(find_bundle "$PROOF/buffr-1.0.69-expanded" BUFFR.vst3)
+          test -n "$POISON_CLAP" && test -n "$POISON_VST3" && test -n "$STAGED_CLAP" && test -n "$STAGED_VST3"
+          ditto "$POISON_CLAP" "$POISON/CLAP/BUFFR.clap"
+          ditto "$POISON_VST3" "$POISON/VST3/BUFFR.vst3"
+          ditto "$STAGED_CLAP" "$STAGED/BUFFR.clap"
+          ditto "$STAGED_VST3" "$STAGED/BUFFR.vst3"
+
+          tree_hash() {
+            local root=$1
+            (cd "$root" && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 shasum -a 256) | shasum -a 256 | cut -d' ' -f1
+          }
+          {
+            printf 'poison_clap=%s\n' "$(tree_hash "$POISON/CLAP/BUFFR.clap")"
+            printf 'poison_vst3=%s\n' "$(tree_hash "$POISON/VST3/BUFFR.vst3")"
+            printf 'staged_clap=%s\n' "$(tree_hash "$STAGED/BUFFR.clap")"
+            printf 'staged_vst3=%s\n' "$(tree_hash "$STAGED/BUFFR.vst3")"
+          } | tee "$RECEIPT/bundle-tree-hashes.txt"
+          codesign --verify --deep --strict --verbose=2 "$STAGED/BUFFR.clap"
+          codesign --verify --deep --strict --verbose=2 "$STAGED/BUFFR.vst3"
+          file "$STAGED/BUFFR.clap/Contents/MacOS/BUFFR" | tee "$RECEIPT/staged-clap.file"
+          file "$STAGED/BUFFR.vst3/Contents/MacOS/BUFFR" | tee "$RECEIPT/staged-vst3.file"
+
+          cat > "$PROOF/bootstrap.lua" <<LUA
+          local out = assert(io.open("$RECEIPT/bootstrap.txt", "w"))
+          out:write("version=" .. reaper.GetAppVersion() .. "\n")
+          out:write("exe=" .. reaper.GetExePath() .. "\n")
+          out:write("resource=" .. reaper.GetResourcePath() .. "\n")
+          out:write("ini=" .. reaper.get_ini_file() .. "\n")
+          out:close()
+          reaper.Main_OnCommand(40004, 0)
+          LUA
+          "$REAPER_APP/Contents/MacOS/REAPER" -newinst -cfgfile "$BOOT/reaper.ini" -nosplash "$PROOF/bootstrap.lua"
+          cat "$RECEIPT/bootstrap.txt"
+          grep -q '^version=7\.79/' "$RECEIPT/bootstrap.txt"
+
+          cp -R "$BOOT/." "$SCENARIO/"
+          python3 - "$SCENARIO/reaper.ini" "$STAGED" <<'PY'
+          import configparser, pathlib, sys
+          path, staged = pathlib.Path(sys.argv[1]), sys.argv[2]
+          cfg = configparser.RawConfigParser(strict=False)
+          cfg.optionxform = str
+          cfg.read(path)
+          section = next((s for s in cfg.sections() if s.lower() == "reaper"), cfg.sections()[0])
+          cfg.set(section, "vstpath64", staged)
+          cfg.set(section, "clap_path_macos-aarch64", staged)
+          with path.open("w") as f:
+              cfg.write(f, space_around_delimiters=False)
+          PY
+          rm -f "$SCENARIO/reaper-vstplugins_arm64.ini" \
+                "$SCENARIO/reaper-vstshells_arm64.ini" \
+                "$SCENARIO/reaper-clap-macos-aarch64.ini"
+          rm -rf "$SCENARIO/UserPlugins/FX"
+          mkdir -p "$SCENARIO/UserPlugins/FX"
+          cp "$SCENARIO/reaper.ini" "$RECEIPT/normalized-reaper.ini"
+
+          cat > "$PROOF/probe.lua" <<LUA
+          local out = assert(io.open("$RECEIPT/probe.txt", "w"))
+          local function line(key, value) out:write(key .. "=" .. tostring(value) .. "\n") end
+          line("version", reaper.GetAppVersion())
+          line("exe", reaper.GetExePath())
+          line("resource", reaper.GetResourcePath())
+          line("ini", reaper.get_ini_file())
+          local candidates = {}
+          local index = 0
+          while true do
+            local ok, name, ident = reaper.EnumInstalledFX(index)
+            if not ok then break end
+            line("inventory", name .. "\t" .. ident)
+            if name:match("^CLAP:") or name:match("^VST3:") then
+              candidates[#candidates + 1] = { name = name, ident = ident }
+            end
+            index = index + 1
+          end
+          line("candidate_count", #candidates)
+          reaper.InsertTrackAtIndex(0, false)
+          local track = reaper.GetTrack(0, 0)
+          for _, candidate in ipairs(candidates) do
+            local fx = reaper.TrackFX_AddByName(track, candidate.name, false, -1)
+            line("instantiate", candidate.name .. "\t" .. candidate.ident .. "\t" .. fx)
+            if fx >= 0 then
+              local type_ok, fx_type = reaper.TrackFX_GetNamedConfigParm(track, fx, "fx_type")
+              local ident_ok, fx_ident = reaper.TrackFX_GetNamedConfigParm(track, fx, "fx_ident")
+              line("instance", tostring(type_ok) .. "\t" .. fx_type .. "\t" .. tostring(ident_ok) .. "\t" .. fx_ident)
+              reaper.TrackFX_Delete(track, fx)
+            end
+          end
+          out:close()
+          reaper.Main_OnCommand(40004, 0)
+          LUA
+          env -u CLAP_PATH "$REAPER_APP/Contents/MacOS/REAPER" -newinst -cfgfile "$SCENARIO/reaper.ini" -nosplash "$PROOF/probe.lua"
+
+          cat "$RECEIPT/probe.txt"
+          cp "$SCENARIO/reaper-vstplugins_arm64.ini" "$RECEIPT/"
+          cp "$SCENARIO/reaper-clap-macos-aarch64.ini" "$RECEIPT/"
+          test "$(grep -c '^inventory=CLAP:' "$RECEIPT/probe.txt")" -eq 1
+          test "$(grep -c '^inventory=VST3:' "$RECEIPT/probe.txt")" -eq 1
+          grep -q $'^candidate_count=2$' "$RECEIPT/probe.txt"
+          test "$(grep -c $'^instantiate=.*\t[0-9][0-9]*$' "$RECEIPT/probe.txt")" -eq 2
+          test "$(grep -c $'^instance=true\t.*\ttrue\t' "$RECEIPT/probe.txt")" -eq 2
+          ! grep -F "$POISON" "$RECEIPT/reaper-vstplugins_arm64.ini" "$RECEIPT/reaper-clap-macos-aarch64.ini"
+          grep -F "$STAGED" "$RECEIPT/reaper-vstplugins_arm64.ini" "$RECEIPT/reaper-clap-macos-aarch64.ini"
+          test "$(tree_hash "$STAGED/BUFFR.clap")" = "$(sed -n 's/^staged_clap=//p' "$RECEIPT/bundle-tree-hashes.txt")"
+          test "$(tree_hash "$STAGED/BUFFR.vst3")" = "$(sed -n 's/^staged_vst3=//p' "$RECEIPT/bundle-tree-hashes.txt")"
+          ! pgrep -x REAPER
+          printf 'teardown=clean\nresult=pass\n' | tee "$RECEIPT/result.txt"
+
+      - name: Preserve proof receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-reaper-isolation-proof-${{ github.run_id }}
+          path: proof
+          if-no-files-found: error
+          retention-days: 90
