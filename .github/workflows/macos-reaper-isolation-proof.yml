@@ -39,7 +39,9 @@ jobs:
           printf '2493cea3cd6105d84bbf02710280d73ea8a119f06370152773483767fade8602  %s\n' "$REAPER_DMG" > "$RECEIPT/reaper-dmg.sha256.expected"
           shasum -a 256 "$REAPER_DMG" | tee "$RECEIPT/reaper-dmg.sha256.actual"
           test "$(shasum -a 256 "$REAPER_DMG" | cut -d' ' -f1)" = 2493cea3cd6105d84bbf02710280d73ea8a119f06370152773483767fade8602
-          MOUNT=$(printf 'Y\n' | hdiutil attach -nobrowse -readonly "$REAPER_DMG" | awk '/\/Volumes\// {sub(/^.*\/Volumes\//,"/Volumes/"); print; exit}')
+          ATTACH_OUTPUT=$((yes Y || true) | hdiutil attach -nobrowse -readonly "$REAPER_DMG")
+          printf '%s\n' "$ATTACH_OUTPUT" | tee "$RECEIPT/dmg-mount.txt"
+          MOUNT=$(printf '%s\n' "$ATTACH_OUTPUT" | awk '/\/Volumes\// {sub(/^.*\/Volumes\//,"/Volumes/"); print; exit}')
           ditto "$MOUNT/REAPER.app" "$REAPER_APP"
           hdiutil detach "$MOUNT"
           file "$REAPER_APP/Contents/MacOS/REAPER" | tee "$RECEIPT/reaper-executable.file"
@@ -91,6 +93,25 @@ jobs:
           file "$STAGED/BUFFR.clap/Contents/MacOS/BUFFR" | tee "$RECEIPT/staged-clap.file"
           file "$STAGED/BUFFR.vst3/Contents/MacOS/BUFFR" | tee "$RECEIPT/staged-vst3.file"
 
+          run_reaper() {
+            "$@" &
+            local pid=$!
+            for _ in {1..180}; do
+              if ! kill -0 "$pid" 2>/dev/null; then
+                wait "$pid"
+                return
+              fi
+              sleep 1
+            done
+            pkill -TERM -P "$pid" 2>/dev/null || true
+            kill "$pid" 2>/dev/null || true
+            sleep 2
+            pkill -KILL -P "$pid" 2>/dev/null || true
+            kill -9 "$pid" 2>/dev/null || true
+            wait "$pid" 2>/dev/null || true
+            return 124
+          }
+
           cat > "$PROOF/bootstrap.lua" <<LUA
           local out = assert(io.open("$RECEIPT/bootstrap.txt", "w"))
           out:write("version=" .. reaper.GetAppVersion() .. "\n")
@@ -100,7 +121,7 @@ jobs:
           out:close()
           reaper.Main_OnCommand(40004, 0)
           LUA
-          "$REAPER_APP/Contents/MacOS/REAPER" -newinst -cfgfile "$BOOT/reaper.ini" -nosplash "$PROOF/bootstrap.lua"
+          run_reaper "$REAPER_APP/Contents/MacOS/REAPER" -newinst -cfgfile "$BOOT/reaper.ini" -nosplash "$PROOF/bootstrap.lua"
           cat "$RECEIPT/bootstrap.txt"
           grep -q '^version=7\.79/' "$RECEIPT/bootstrap.txt"
 
@@ -158,7 +179,7 @@ jobs:
           out:close()
           reaper.Main_OnCommand(40004, 0)
           LUA
-          env -u CLAP_PATH "$REAPER_APP/Contents/MacOS/REAPER" -newinst -cfgfile "$SCENARIO/reaper.ini" -nosplash "$PROOF/probe.lua"
+          run_reaper env -u CLAP_PATH "$REAPER_APP/Contents/MacOS/REAPER" -newinst -cfgfile "$SCENARIO/reaper.ini" -nosplash "$PROOF/probe.lua"
 
           cat "$RECEIPT/probe.txt"
           cp "$SCENARIO/reaper-vstplugins_arm64.ini" "$RECEIPT/"
