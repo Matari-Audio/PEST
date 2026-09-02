@@ -16,6 +16,10 @@ _Avoid_: Artifact path, build output
 The stable host-facing identity used to discover one plug-in: a CLAP plug-in ID or VST3 class ID.
 _Avoid_: Display name, vendor and name, scan order
 
+**Plugin Target**:
+One logical plug-in in a Plugin Release, mapped to its Format Identities and tested behavior.
+_Avoid_: Product, bundle entry, plug-in path
+
 **Plugin Release**:
 One explicit release identity whose platform-specific Plugin Artifacts are tested and aggregated.
 _Avoid_: Build number, latest version
