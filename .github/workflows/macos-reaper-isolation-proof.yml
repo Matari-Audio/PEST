@@ -96,13 +96,28 @@ jobs:
           run_reaper() {
             "$@" &
             local pid=$!
-            for _ in {1..180}; do
+            for attempt in {1..180}; do
               if ! kill -0 "$pid" 2>/dev/null; then
                 wait "$pid"
                 return
               fi
+              if (( attempt >= 8 && attempt <= 20 )); then
+                osascript <<'OSA' >> "$RECEIPT/ui-dismissal.log" 2>&1 || true
+                tell application "REAPER" to activate
+                tell application "System Events"
+                  tell process "REAPER"
+                    if exists button "Still Evaluating" of window 1 then
+                      click button "Still Evaluating" of window 1
+                      return "clicked Still Evaluating"
+                    end if
+                  end tell
+                end tell
+                OSA
+              fi
               sleep 1
             done
+            ps -axo pid,ppid,state,command > "$RECEIPT/reaper-timeout-processes.txt"
+            screencapture -x "$RECEIPT/reaper-timeout.png" || true
             pkill -TERM -P "$pid" 2>/dev/null || true
             kill "$pid" 2>/dev/null || true
             sleep 2
