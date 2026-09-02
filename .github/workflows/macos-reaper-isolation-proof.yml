@@ -118,6 +118,8 @@ jobs:
                       click button "Still Evaluating" of window 1
                       return "clicked Still Evaluating"
                     end if
+                    key code 53
+                    return "pressed Escape for first-run sheet"
                   end tell
                 end tell
           OSA
