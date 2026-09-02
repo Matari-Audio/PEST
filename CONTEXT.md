@@ -8,6 +8,10 @@ PEST describes portable evidence about an already-built audio plug-in without de
 One immutable CLAP or VST3 bundle supplied to PEST for testing.
 _Avoid_: Build, binary under test, installed plug-in
 
+**Artifact Slot**:
+A manifest-declared format and identity role filled by exactly one Plugin Artifact when a run starts.
+_Avoid_: Artifact path, build output
+
 **Plugin Release**:
 One explicit release identity whose platform-specific Plugin Artifacts are tested and aggregated.
 _Avoid_: Build number, latest version
