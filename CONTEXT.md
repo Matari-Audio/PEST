@@ -12,6 +12,10 @@ _Avoid_: Build, binary under test, installed plug-in
 A manifest-declared format and identity role filled by exactly one Plugin Artifact when a run starts.
 _Avoid_: Artifact path, build output
 
+**Format Identity**:
+The stable host-facing identity used to discover one plug-in: a CLAP plug-in ID or VST3 class ID.
+_Avoid_: Display name, vendor and name, scan order
+
 **Plugin Release**:
 One explicit release identity whose platform-specific Plugin Artifacts are tested and aggregated.
 _Avoid_: Build number, latest version
