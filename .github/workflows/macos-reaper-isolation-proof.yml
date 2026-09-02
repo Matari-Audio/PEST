@@ -106,6 +106,14 @@ jobs:
                 tell application "REAPER" to activate
                 tell application "System Events"
                   tell process "REAPER"
+                    if exists button "No" of sheet 1 of window 1 then
+                      click button "No" of sheet 1 of window 1
+                      return "clicked No on audio device sheet"
+                    end if
+                    if exists button "Still Evaluating" of sheet 1 of window 1 then
+                      click button "Still Evaluating" of sheet 1 of window 1
+                      return "clicked Still Evaluating"
+                    end if
                     if exists button "Still Evaluating" of window 1 then
                       click button "Still Evaluating" of window 1
                       return "clicked Still Evaluating"
