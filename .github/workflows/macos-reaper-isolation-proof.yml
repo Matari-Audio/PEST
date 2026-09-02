@@ -39,7 +39,7 @@ jobs:
           printf '2493cea3cd6105d84bbf02710280d73ea8a119f06370152773483767fade8602  %s\n' "$REAPER_DMG" > "$RECEIPT/reaper-dmg.sha256.expected"
           shasum -a 256 "$REAPER_DMG" | tee "$RECEIPT/reaper-dmg.sha256.actual"
           test "$(shasum -a 256 "$REAPER_DMG" | cut -d' ' -f1)" = 2493cea3cd6105d84bbf02710280d73ea8a119f06370152773483767fade8602
-          MOUNT=$(hdiutil attach -acceptlicense -nobrowse -readonly "$REAPER_DMG" | awk '/\/Volumes\// {sub(/^.*\/Volumes\//,"/Volumes/"); print; exit}')
+          MOUNT=$(printf 'Y\n' | hdiutil attach -nobrowse -readonly "$REAPER_DMG" | awk '/\/Volumes\// {sub(/^.*\/Volumes\//,"/Volumes/"); print; exit}')
           ditto "$MOUNT/REAPER.app" "$REAPER_APP"
           hdiutil detach "$MOUNT"
           file "$REAPER_APP/Contents/MacOS/REAPER" | tee "$RECEIPT/reaper-executable.file"
